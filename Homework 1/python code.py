@@ -6,20 +6,6 @@ import time
 from datetime import datetime
 
 BASE_URL = "https://www.mse.mk/en/stats/symbolhistory/SYMBOL?year=YEAR"
-company_symbols = [
-    "TEL", "KMB", "STB", "ALK", "ALKB", "AMEH", "APTK", "ATPP", "AUMK", "BANA",
-    "BGOR", "BIKF", "BIM", "BLTU", "CBNG", "CDHV", "CEVI", "CKB", "CKBKO",
-    "DEBA", "DIMI", "EDST", "ELMA", "ELNC", "ENER", "ENSA", "EUHA", "EUMK",
-    "EVRO", "FAKM", "FERS", "FKTL", "FOMK", "GLO", "GRKI", "GNB", "GRC",
-    "HAPA", "HOYA", "HUM", "ILEX", "INVI", "IRAC", "ITSP", "KAP", "KAKV",
-    "KAX", "KEIN", "KGL", "KOL", "KONT", "KRIN", "KTP", "LIR", "LUX",
-    "MKD", "MGM", "MTB", "MZK", "NEUK", "NEZN", "NGK", "NLB", "NLBK",
-    "NLG", "NPT", "OHR", "OHRP", "OKEG", "OPT", "ORCE", "OZ", "PBP",
-    "PEST", "PLPT", "PRIN", "PNT", "RBA", "RAK", "RBKR", "RUB", "SBU",
-    "SHNK", "SKOP", "SMAG", "SMK", "SNK", "SNT", "SNP", "SOF", "SRB",
-    "STUB", "TAN", "TKO", "TLM", "VAP", "VIK", "VIT", "VLB", "ZST",
-    "ZSE"
-]
 
 output_dir = "MSE_data"
 if not os.path.exists(output_dir):
@@ -32,7 +18,12 @@ start_time = time.time()
 
 
 def filter_1_get_issuers():
-    return company_symbols
+    url = "https://www.mse.mk/en/stats/symbolhistory/TEL"
+    response = requests.get(url)
+    soup = BeautifulSoup(response.content, 'html.parser')
+    # Extracting the options from the dropdown menu
+    issuers = [option['value'] for option in soup.select('select[name="Code"] option') if option['value']]
+    return issuers
 
 
 def filter_2_check_last_date(symbol):
@@ -72,6 +63,8 @@ def filter_4_save_data(symbol, all_data):
     if not all_data.empty:
         all_data.to_csv(output_path, index=False)
 
+
+company_symbols = filter_1_get_issuers()
 
 for symbol in company_symbols:
     start_year = filter_2_check_last_date(symbol)
