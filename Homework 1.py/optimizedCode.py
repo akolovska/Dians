@@ -1,3 +1,6 @@
+//ova e optimiziran kod za 6 jadren procesor i 32 gb ram
+//se izvrsuva za 66.85 sec
+
 import requests
 from bs4 import BeautifulSoup
 import pandas as pd
