@@ -1,0 +1,11 @@
+ul {
+    list-style-type: none;
+    background-color: aqua;
+}
+ul li {
+    float: left;
+    margin-left: 100px;
+}
+a {
+    display: block;
+}
