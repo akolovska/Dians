@@ -1,0 +1,87 @@
+import requests
+from bs4 import BeautifulSoup
+import pandas as pd
+from transformers import pipeline
+import os
+import matplotlib.pyplot as plt
+
+
+news_dir = "MSE_news"
+if not os.path.exists(news_dir):
+    os.makedirs(news_dir)
+
+
+def scrape_news(symbol):
+    url = f"https://www.mse.mk/en/symbol/{symbol}"
+    response = requests.get(url)
+    if response.status_code != 200:
+        print(f"Failed to retrieve news for {symbol}. Status code: {response.status_code}")
+        return []
+
+    soup = BeautifulSoup(response.content, "html.parser")
+    news_items = []
+
+    articles = soup.find_all("div", class_="container-seinet")
+    for article in articles:
+        title = article.find("h2").text.strip() if article.find("h2") else "No Title"
+        date = article.find("time").text.strip() if article.find("time") else "No Date"
+        link = article.find("a", href=True)["href"] if article.find("a", href=True) else "No Link"
+        news_items.append({"Date": date, "Title": title, "Link": link})
+    return news_items
+
+# Function to analyze sentiment using transformers pipeline
+def analyze_sentiment(news_df):
+    classifier = pipeline("sentiment-analysis")
+    def get_sentiment(text):
+        result = classifier(text)[0]
+        polarity = result['score'] if result['label'] == "POSITIVE" else -result['score']
+        return polarity
+
+    news_df["Sentiment"] = news_df["Title"].apply(get_sentiment)
+    news_df["Sentiment_Category"] = news_df["Sentiment"].apply(
+        lambda score: "Positive" if score > 0 else "Negative" if score < 0 else "Neutral"
+    )
+    return news_df
+
+# Function to generate recommendations based on sentiment
+def generate_recommendations(news_df):
+    sentiment_counts = news_df["Sentiment_Category"].value_counts()
+    positive_count = sentiment_counts.get("Positive", 0)
+    negative_count = sentiment_counts.get("Negative", 0)
+
+    if positive_count > negative_count:
+        return "Buy"
+    elif negative_count > positive_count:
+        return "Sell"
+    else:
+        return "Hold"
+
+
+for symbol in cs:
+    print(f"Scraping news for {symbol}...")
+    news = scrape_news(symbol)
+    if not news:
+        print(f"No news found for {symbol}.")
+        continue
+
+
+    news_df = pd.DataFrame(news)
+    news_df.to_csv(f"{news_dir}/{symbol}_news.csv", index=False)
+
+
+    news_df = analyze_sentiment(news_df)
+    print(news_df)
+
+
+    recommendation = generate_recommendations(news_df)
+    print(f"Recommendation for {symbol}: {recommendation}")
+
+
+    plt.figure(figsize=(10, 6))
+    color_mapping = {"Positive": "green", "Negative": "red", "Neutral": "gray"}
+    colors = [color_mapping[sentiment] for sentiment in news_df["Sentiment_Category"].value_counts().index]
+    news_df["Sentiment_Category"].value_counts().plot(kind="bar", color=colors)
+    plt.title(f"Sentiment Analysis for {symbol}")
+    plt.xlabel("Sentiment Category")
+    plt.ylabel("Number of Articles")
+    plt.show()

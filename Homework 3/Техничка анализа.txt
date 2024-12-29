@@ -1,0 +1,80 @@
+!pip install ta
+
+
+import pandas as pd
+import ta  # Technical Analysis Library
+import matplotlib.pyplot as plt
+
+news_dir = "MSE_predictions"
+if not os.path.exists(news_dir):
+    os.makedirs(news_dir)
+
+def add_moving_averages(df):
+    df['SMA_10'] = df['Last trade price'].rolling(window=10).mean()  # (10 дена)
+    df['SMA_50'] = df['Last trade price'].rolling(window=50).mean()  # (50 дена)
+    df['EMA_10'] = df['Last trade price'].ewm(span=10, adjust=False).mean()  # (10 дена)
+    df['EMA_50'] = df['Last trade price'].ewm(span=50, adjust=False).mean()  # (50 дена)
+    df['WMA_20'] = df['Last trade price'].rolling(window=20).apply(lambda prices: (prices * range(1, len(prices)+1)).sum() / sum(range(1, len(prices)+1)))  # (20 дена)
+    return df
+
+def add_oscillators(df):
+    df['RSI'] = ta.momentum.RSIIndicator(close=df['Last trade price'], window=14).rsi()
+    df['MACD'] = ta.trend.MACD(close=df['Last trade price']).macd_diff()
+    df['Stochastic_K'] = ta.momentum.StochasticOscillator(high=df['Max'], low=df['Min'], close=df['Last trade price']).stoch()
+    df['Stochastic_D'] = ta.momentum.StochasticOscillator(high=df['Max'], low=df['Min'], close=df['Last trade price']).stoch_signal()
+    df['CCI'] = ta.trend.CCIIndicator(high=df['Max'], low=df['Min'], close=df['Last trade price'], window=20).cci()
+    return df
+
+# (buy/sell/hold)
+def generate_signals(df):
+    df['Signal'] = "Hold"  # Default
+    df.loc[(df['RSI'] < 30) & (df['Last trade price'] > df['SMA_10']), 'Signal'] = 'Buy'
+    df.loc[(df['RSI'] > 70) & (df['Last trade price'] < df['SMA_10']), 'Signal'] = 'Sell'
+    df.loc[(df['EMA_10'] > df['EMA_50']) & (df['Last trade price'] > df['EMA_10']), 'Signal'] = 'Buy'
+    df.loc[(df['EMA_10'] < df['EMA_50']) & (df['Last trade price'] < df['EMA_10']), 'Signal'] = 'Sell'
+    return df
+
+def analyze_timeframes(data, symbol):
+    data_daily = data.copy()
+    data_daily = add_moving_averages(data_daily)
+    data_daily = add_oscillators(data_daily)
+    data_daily = generate_signals(data_daily)
+
+    data_weekly = data.resample('W').agg({'Max': 'max', 'Min': 'min', 'Last trade price': 'last', 'Volume': 'sum'})
+    data_weekly = add_moving_averages(data_weekly)
+    data_weekly = add_oscillators(data_weekly)
+    data_weekly = generate_signals(data_weekly)
+
+    data_monthly = data.resample('M').agg({'Max': 'max', 'Min': 'min', 'Last trade price': 'last', 'Volume': 'sum'})
+    data_monthly = add_moving_averages(data_monthly)
+    data_monthly = add_oscillators(data_monthly)
+    data_monthly = generate_signals(data_monthly)
+
+    data_daily.to_csv(f"{news_dir}/{symbol}_daily_analysis.csv", index=False)
+    data_weekly.to_csv(f"{news_dir}/{symbol}_weekly_analysis.csv", index=False)
+    data_monthly.to_csv(f"{news_dir}/{symbol}_monthly_analysis.csv", index=False)
+
+    print(f"Analysis completed for {symbol} on daily, weekly, and monthly timeframes.")
+
+    plt.figure(figsize=(14, 7))
+    plt.plot(data_daily['Last trade price'], label='Close Price')
+    plt.plot(data_daily['SMA_10'], label='SMA 10')
+    plt.plot(data_daily['EMA_10'], label='EMA 10')
+    plt.legend()
+    plt.title(f"Daily Analysis for {symbol}")
+    plt.show()
+
+
+for symbol in cs:
+    data=pd.read_csv(f"MSE_data/{symbol}_data.csv")
+    data["Date"]=pd.to_datetime(data["Date"])
+    data.set_index(keys=["Date"], inplace=True)
+
+    data['Last trade price']=pd.to_numeric(data['Last trade price'].replace({',':''},regex=True))
+    data['Avg. Price']=pd.to_numeric(data['Avg. Price'].replace({',':''},regex=True))
+    data['Turnover in BEST in denars']=pd.to_numeric(data['Turnover in BEST in denars'].replace({',':''},regex=True))
+    data['Total turnover in denars']=pd.to_numeric(data['Total turnover in denars'].replace({',':''},regex=True))
+    data['Volume']=pd.to_numeric(data['Volume'].replace({',':''},regex=True))
+    data['Min']=pd.to_numeric(data['Volume'].replace({',':''},regex=True))
+    data['Max']=pd.to_numeric(data['Volume'].replace({',':''},regex=True))
+    analyze_timeframes(data, symbol)
