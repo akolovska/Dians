@@ -1,0 +1,203 @@
+#the part from the first homework:
+import requests
+from bs4 import BeautifulSoup
+import pandas as pd
+import os
+import time
+from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
+BASE_URL = "https://www.mse.mk/en/stats/symbolhistory/SYMBOL?year=YEAR"
+output_dir = "MSE_data"
+if not os.path.exists(output_dir):
+    os.makedirs(output_dir)
+
+current_year = datetime.now().year
+years_to_retrieve = 10
+
+
+def filter_1_get_issuers():
+    url = "https://www.mse.mk/en/stats/symbolhistory/TEL"
+    response = requests.get(url)
+    soup = BeautifulSoup(response.content, 'html.parser')
+    issuers = [option['value'] for option in soup.select('select[name="Code"] option') if
+               option['value'] and not any(char.isdigit() for char in option['value'])]
+    return issuers
+
+
+def filter_2_check_last_date(symbol):
+    output_path = os.path.join(output_dir, f"{symbol}_data.csv")
+    if os.path.exists(output_path):
+        df = pd.read_csv(output_path)
+        last_date = df['Date'].max()
+        last_year = datetime.strptime(last_date, "%m/%d/%Y").year
+        return last_year + 1
+    return current_year - years_to_retrieve
+
+
+def filter_3_fetch_data(symbol, year, session):
+    url = BASE_URL.replace("SYMBOL", symbol).replace("YEAR", str(year))
+    response = session.get(url)
+    if response.status_code == 200:
+        soup = BeautifulSoup(response.text, "html.parser")
+        table = soup.find("table")
+        if table:
+            rows = table.find_all("tr")
+            headers = [header.text.strip() for header in rows[0].find_all("th")]
+            data = []
+            for row in rows[1:]:
+                columns = row.find_all("td")
+                data.append([col.text.strip() for col in columns])
+            df = pd.DataFrame(data, columns=headers)
+            return df
+    return pd.DataFrame()
+
+
+def filter_4_save_data(symbol, all_data):
+    output_path = os.path.join(output_dir, f"{symbol}_data.csv")
+    if not all_data.empty:
+        all_data.to_csv(output_path, index=False)
+
+
+def process_symbol(symbol):
+    start_year = current_year - years_to_retrieve
+    end_year = current_year
+    all_data = pd.DataFrame()
+    with requests.Session() as session:
+        with ThreadPoolExecutor(max_workers=12) as executor:
+            futures = [executor.submit(filter_3_fetch_data, symbol, year, session) for year in
+                       range(start_year, end_year + 1)]
+            for future in as_completed(futures):
+                yearly_data = future.result()
+                all_data = pd.concat([all_data, yearly_data])
+                time.sleep(0.1)
+    filter_4_save_data(symbol, all_data)
+
+
+def main():
+    start_time = time.time()
+    company_symbols = filter_1_get_issuers()
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        executor.map(process_symbol, company_symbols)
+    end_time = time.time()
+    elapsed_time = end_time - start_time
+    print(f"{elapsed_time:.2f}")
+
+
+if __name__ == "__main__":
+    main()
+    cs=filter_1_get_issuers()
+    print(cs)
+
+
+
+#3rd request:
+
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import MinMaxScaler
+from keras.api.models import Sequential
+from keras.api.layers import Input, LSTM, Dense
+from sklearn.metrics import r2_score,mean_squared_error
+import seaborn as sns
+import operator
+import numpy as np
+
+
+for i in cs:
+  data=pd.read_csv(f"MSE_data/{i}_data.csv")
+  #print(i)
+  data["Date"]=pd.to_datetime(data["Date"]).dt.date
+  data.set_index(keys=["Date"], inplace=True)
+
+  #bidejki del od firmite nemaat konkretna vredost za last trade price algoritmot ke kazuva ako nema celosno podatoci, ke kazuvadeka nema. Vo sportivno ke presmetuva se shto treba
+  if data['Last trade price'].isnull().all():
+    print(f"{i} company doesn't have any iformation about last trade price")
+  else:
+
+    #print(data.info())
+    data['Last trade price']=pd.to_numeric(data['Last trade price'].replace({',':''},regex=True))
+    data['Avg. Price']=pd.to_numeric(data['Avg. Price'].replace({',':''},regex=True))
+    data['Turnover in BEST in denars']=pd.to_numeric(data['Turnover in BEST in denars'].replace({',':''},regex=True))
+    data['Total turnover in denars']=pd.to_numeric(data['Total turnover in denars'].replace({',':''},regex=True))
+    data['Volume']=pd.to_numeric(data['Volume'].replace({',':''},regex=True))
+    #print(data.info())
+    data=data.drop(columns='Max')
+    data=data.drop(columns='Min')
+
+
+    data.index = pd.to_datetime(data.index)
+    duplicates = data[data.index.duplicated(keep=False)]
+
+
+    data.index = pd.to_datetime(data.index, errors="coerce")
+    data = data.dropna(subset=["Last trade price"])
+    data = data[~data.index.duplicated(keep="first")]
+    data = data.sort_index(ascending=True)
+
+    if data.empty:
+            print(f"{i} company data is empty after cleaning.")
+            continue
+
+    lag=7
+    periods=range(lag,0,-1)
+    data1=data[['Last trade price']].copy()
+    data.shift(periods=periods)
+    data=pd.concat([data,data.shift(periods=periods)],axis=1)
+    data.dropna(axis=0, inplace=True)
+    #data.drop(columns='Last trade price')
+    data=data.drop(columns='Avg. Price')
+    data=data.drop(columns='%chg.')
+    data=data.drop(columns='Volume')
+    data=data.drop(columns='Turnover in BEST in denars')
+    data=data.drop(columns='Total turnover in denars')
+
+    x=data[:]
+    x=x.drop(columns='Last trade price')
+    #print(x.shape)
+    y=data['Last trade price']
+
+    if len(x) <= 1:  # Check if the DataFrame has at least two samples
+            print(f"{i} company doesn't have enough data after preprocessing.")
+            continue
+
+    train_x,test_x,train_y,test_y=train_test_split(x,y,train_size=0.70,shuffle=False)
+
+    #print(data.info())
+
+    scaler = MinMaxScaler()
+    train_x = scaler.fit_transform(train_x)
+    test_x = scaler.transform(test_x)
+    #print(train_x.shape)
+
+    pad_size = lag - (train_x.shape[1] % lag)
+    if pad_size != lag:  # If padding is needed
+      train_x = np.pad(train_x, ((0, 0), (0, pad_size)), mode='constant', constant_values=0)
+      test_x = np.pad(test_x, ((0, 0), (0, pad_size)), mode='constant', constant_values=0)
+
+    train_x = train_x.reshape(train_x.shape[0], lag, (train_x.shape[1] // lag))
+    test_x = test_x.reshape(test_x.shape[0], lag, (test_x.shape[1] // lag))
+
+    #print((train_x.shape[1], train_x.shape[2]))
+
+    model = Sequential([
+      Input((train_x.shape[1], train_x.shape[2],)),
+      LSTM(64, activation="relu", return_sequences=True),
+      LSTM(32, activation="relu"),
+      Dense(1, activation="linear")
+    ])
+    model.compile(
+      loss="mean_squared_error",
+      optimizer="adam",
+      metrics=["mean_squared_error"],
+    )
+    if len(train_x)<5:
+      print("Dataset too small for training. Please provide more data.")
+    else:
+      history = model.fit(train_x, train_y, validation_split=0.3, epochs=20, batch_size=7,shuffle=False)
+      pred_y = model.predict(test_x)
+    #sns.lineplot(history.history['loss'][1:], label='loss')
+    #sns.lineplot(history.history['val_loss'][1:], label='val_loss')
+      resultR2=r2_score(test_y, pred_y)
+      print(resultR2)
+      resultMSE=mean_squared_error(test_y,pred_y)
+      print(resultMSE)
