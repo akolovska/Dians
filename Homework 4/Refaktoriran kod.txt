@@ -1,0 +1,116 @@
+import os
+import time
+import requests
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+from bs4 import BeautifulSoup
+from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from requests.adapters import HTTPAdapter
+from requests.packages.urllib3.util.retry import Retry
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import MinMaxScaler
+from sklearn.metrics import r2_score, mean_squared_error
+from keras.models import Sequential
+from keras.layers import Input, LSTM, Dense
+import ta  # Technical Analysis Library
+
+# Constants
+BASE_URL = "https://www.mse.mk/en/stats/symbolhistory/{symbol}?year={year}"
+OUTPUT_DIR = "MSE_data"
+NEWS_DIR = "MSE_news"
+PREDICTION_DIR = "MSE_predictions"
+CURRENT_YEAR = datetime.now().year
+YEARS_TO_RETRIEVE = 10
+
+# Ensure directories exist
+for directory in [OUTPUT_DIR, NEWS_DIR, PREDICTION_DIR]:
+    os.makedirs(directory, exist_ok=True)
+
+def setup_session():
+    session = requests.Session()
+    retries = Retry(total=5, backoff_factor=0.5, status_forcelist=[500, 502, 503, 504])
+    adapter = HTTPAdapter(max_retries=retries, pool_connections=20, pool_maxsize=20)
+    session.mount("https://", adapter)
+    return session
+
+def get_issuers():
+    url = "https://www.mse.mk/en/stats/symbolhistory/TEL"
+    response = requests.get(url)
+    soup = BeautifulSoup(response.content, 'html.parser')
+    return [option['value'] for option in soup.select('select[name="Code"] option') if option['value']]
+
+def fetch_data(symbol, year, session):
+    url = BASE_URL.format(symbol=symbol, year=year)
+    response = session.get(url)
+    if response.status_code == 200:
+        soup = BeautifulSoup(response.text, "html.parser")
+        table = soup.find("table")
+        if table:
+            rows = table.find_all("tr")
+            headers = [header.text.strip() for header in rows[0].find_all("th")]
+            data = [[col.text.strip() for col in row.find_all("td")] for row in rows[1:]]
+            return pd.DataFrame(data, columns=headers)
+    return pd.DataFrame()
+
+def save_data(symbol, data):
+    if not data.empty:
+        data.to_csv(os.path.join(OUTPUT_DIR, f"{symbol}_data.csv"), index=False)
+
+def process_symbol(symbol):
+    all_data = pd.DataFrame()
+    session = setup_session()
+    with ThreadPoolExecutor(max_workers=12) as executor:
+        futures = [executor.submit(fetch_data, symbol, year, session) for year in range(CURRENT_YEAR - YEARS_TO_RETRIEVE, CURRENT_YEAR + 1)]
+        for future in as_completed(futures):
+            all_data = pd.concat([all_data, future.result()])
+            time.sleep(0.1)
+    save_data(symbol, all_data)
+
+def add_indicators(df):
+    df['SMA_10'] = df['Last trade price'].rolling(window=10).mean()
+    df['EMA_10'] = df['Last trade price'].ewm(span=10, adjust=False).mean()
+    df['RSI'] = ta.momentum.RSIIndicator(close=df['Last trade price'], window=14).rsi()
+    return df
+
+def prepare_data(data, lag=7):
+    for period in range(lag, 0, -1):
+        data[f'lag_{period}'] = data['Last trade price'].shift(period)
+    data.dropna(inplace=True)
+    return data
+
+def train_lstm_model(train_x, train_y):
+    model = Sequential([
+        Input((train_x.shape[1], train_x.shape[2])),
+        LSTM(64, activation="relu", return_sequences=True),
+        LSTM(32, activation="relu"),
+        Dense(1, activation="linear")
+    ])
+    model.compile(loss="mean_squared_error", optimizer="adam", metrics=["mean_squared_error"])
+    model.fit(train_x, train_y, validation_split=0.3, epochs=20, batch_size=7, shuffle=False)
+    return model
+
+def process_data_for_lstm(symbol):
+    data = pd.read_csv(f"{OUTPUT_DIR}/{symbol}_data.csv", parse_dates=['Date'], index_col='Date')
+    data = prepare_data(data)
+    x, y = data.drop(columns=['Last trade price']), data['Last trade price']
+    train_x, test_x, train_y, test_y = train_test_split(x, y, train_size=0.7, shuffle=False)
+    scaler = MinMaxScaler()
+    train_x, test_x = scaler.fit_transform(train_x), scaler.transform(test_x)
+    train_x, test_x = train_x.reshape(train_x.shape[0], -1, 1), test_x.reshape(test_x.shape[0], -1, 1)
+    model = train_lstm_model(train_x, train_y)
+    predictions = model.predict(test_x)
+    print(f"R2 Score for {symbol}: {r2_score(test_y, predictions)}")
+    print(f"MSE for {symbol}: {mean_squared_error(test_y, predictions)}")
+
+def main():
+    start_time = time.time()
+    company_symbols = get_issuers()
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        executor.map(process_symbol, company_symbols)
+    print(f"Total execution time: {time.time() - start_time:.2f} seconds")
+
+if __name__ == "__main__":
+    main()
